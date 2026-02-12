@@ -1,0 +1,322 @@
+**development blueprint** for an MV3 extension that mitigates ClickFix-style attacks.
+
+Below is a “build plan” you can follow: architecture, files, manifest shape, modes, allowlist, detection engine, UX, and constraints (like why you can’t disable Win+R). You can pretty much implement straight from this.
+
+---
+
+## Goal and threat model
+
+### What you can stop
+
+* A webpage (malicious or compromised) trying to place **dangerous commands** onto the clipboard via:
+
+  * `navigator.clipboard.writeText`
+  * `document.execCommand("copy")`
+  * `copy` events / clipboardData manipulation
+* “Copy this to fix it” flows that rely on **hidden Unicode**, **obfuscation**, or **shell/powershell one-liners**
+
+### What you cannot stop (document this clearly)
+
+* User manually typing a command
+* User pasting into **Windows Run (Win+R)**, Terminal, PowerShell, DevTools, etc. (outside the browser)
+* Disabling global OS hotkeys like Win+R from a browser extension (not possible)
+
+Your strategy is: **prevent the dangerous payload from ever being placed on the clipboard, and warn loudly when a site tries.**
+
+---
+
+## MV3 architecture overview
+
+### Components
+
+1. **Service Worker** (background)
+
+   * Stores settings (mode, allowlist)
+   * Receives events from content scripts
+   * Shows notifications / badge count
+   * Maintains a local audit log (optional)
+
+2. **Content Script** (runs on pages)
+
+   * Detects “copy intent” signals (click, keydown, selection)
+   * Bridges messages between page-injected script and the extension
+   * Displays on-page warning UI (optional but recommended for strict mode)
+
+3. **Page-World Injected Script** (critical for reliable interception)
+
+   * Runs in the page’s JS world (not isolated) so it can monkey-patch:
+
+     * `navigator.clipboard.writeText`
+     * `document.execCommand`
+     * intercept `copy` event at capture phase
+   * Sends “clipboard write attempt” payloads to content script via `window.postMessage`
+
+Why inject? Because content scripts are isolated; patching `navigator.clipboard` from a content script often doesn’t affect the page’s own JS calls.
+
+---
+
+## Modes and behavior spec
+
+### Mode: Off (site disabled)
+
+* No interception
+* No warnings
+* No logs (optional)
+* Triggered by:
+
+  * user toggling Off in popup for current site
+  * allowlist match
+
+### Mode: Normal
+
+* Allow most copies
+* Warn on suspicious patterns
+* Block only “high confidence” malicious patterns (examples below)
+* Logs warnings/blocks
+
+### Mode: Strict
+
+* Only allow clipboard writes when there is **recent explicit user intent**
+
+  * user clicked a copy-like element OR
+  * user pressed Ctrl/Cmd+C OR
+  * user used context menu copy (hard to see directly; infer from key/mouse + selection)
+* Block suspicious patterns by default
+* Optionally “quarantine” clipboard writes:
+
+  * replace clipboard content with a safe placeholder string
+  * require explicit “Copy anyway” action from your extension UI
+
+**Strict mode is where most site breakage will happen**, so you need:
+
+* a quick “Allow once”
+* a “Turn off for this site”
+* an allowlist entry workflow
+
+---
+
+## Allowlist spec (user-defined)
+
+### Storage format
+
+Store user entries in `chrome.storage.sync` (or local if you want privacy-only):
+
+* `example.com` (matches exact host + subdomains if you choose)
+* `*.example.com` (explicit wildcard)
+* `sub.example.com` (exact)
+
+### Matching rules (recommendation)
+
+* Normalize host to punycode + lowercase
+* If allowlist contains:
+
+  * `example.com`: match `example.com` and `*.example.com` (user-friendly)
+  * `*.example.com`: match subdomains only, not apex (optional)
+* Never allowlist by full URL path initially; keep it domain-based to stay simple.
+
+---
+
+## Clipboard interception design
+
+### Events you need to observe
+
+From the injected page-world script, report:
+
+* attempted text (or a redacted preview; see privacy note)
+* API used (`writeText`, `execCommand`, `copyEvent`)
+* timestamp
+* whether the page reports it was triggered by a user gesture (often unreliable)
+* current URL + frame info
+
+From the content script, track “user intent” signals:
+
+* last click time + target element metadata (tag, aria-label, innerText snippet)
+* last keydown time for Ctrl/Cmd+C
+* last selection change time
+* last right-click time (contextmenu)
+
+Strict-mode intent window: typically **800–1500 ms** is a good start.
+
+### Decision pipeline
+
+1. Determine site mode (Off/Normal/Strict) using allowlist + per-site override
+
+2. If Off → allow
+
+3. Compute **risk score** for clipboard text
+
+4. Apply mode policy:
+
+   * Normal: block if score >= HIGH, warn if score >= MED
+   * Strict: block if (no user intent) OR (score >= MED)
+     (you can tune this)
+
+5. Return decision to injected script quickly:
+
+* allow + pass-through original clipboard
+* block
+* quarantine (replace clipboard text)
+
+---
+
+## Dangerous command pattern detection
+
+You want “high signal” matches, not a million false positives. Use **categories** with weights.
+
+### Category examples (high confidence)
+
+* PowerShell execution / download
+
+  * `powershell` with `-enc`, `-encodedcommand`
+  * `IEX` / `Invoke-Expression`
+  * `DownloadString`, `Invoke-WebRequest`, `Start-BitsTransfer`
+* Windows LOLBins
+
+  * `mshta`, `rundll32`, `regsvr32`, `certutil`, `bitsadmin`, `wmic`
+* *nix download-and-execute
+
+  * `curl` or `wget` piped to `sh`/`bash`/`zsh`
+  * `python -c` / `perl -e` with network fetch patterns
+* Obfuscation
+
+  * long base64 blobs
+  * lots of escaping, concatenation (`"+"`, `^`, backticks)
+  * zero-width characters, RTL override characters
+
+### Medium confidence (warn in Normal, block in Strict)
+
+* “Paste into DevTools console” style JS:
+
+  * `fetch(` + `eval` / `Function(` / `atob(`
+  * `javascript:` URIs with long payloads
+* “Run box” prompt phrasing embedded around a command:
+
+  * “Press Win+R”
+  * “Open Terminal and paste”
+  * “Paste this into PowerShell”
+
+### Unicode + invisible character defense (important)
+
+Implement:
+
+* detection of zero-width chars, bidi overrides
+* a “visualize” sanitizer for UI display
+* strict policy: if hidden chars appear in a command-like string → escalate risk
+
+---
+
+## User experience spec
+
+### Popup
+
+* Mode selector: Normal / Strict / Off (for current site)
+* Allowlist management shortcut
+* “Recent blocks/warnings” count
+
+### Interstitial / notification behavior
+
+When you block in Normal/Strict:
+
+* Show a browser notification:
+
+  * “Blocked suspicious clipboard content from example.com”
+  * include category labels (e.g., “PowerShell encoded command”)
+* Optional on-page banner with buttons:
+
+  * **Allow once**
+  * **Turn off for this site**
+  * **View details** (redacted preview)
+
+### “Allow once” rules
+
+Allow next clipboard write attempt for this site within, say, **30 seconds** or **one event**, whichever first.
+
+---
+
+## Privacy handling (developer guidance)
+
+Recommended:
+
+* Do detection locally
+* Store logs without full payload by default:
+
+  * store hashes + category + length + first ~40 safe chars with invisibles escaped
+* Provide a “store full clipboard text in logs” toggle OFF by default
+
+---
+
+## Manifest shape (MV3) you’ll likely need
+
+You said you don’t have one yet, so here’s what the doc should steer toward (conceptually):
+
+* MV3 + service worker
+* content scripts on all pages (or “on demand” injection)
+* permissions:
+
+  * `storage`
+  * `notifications` (optional)
+  * `scripting` (if you inject programmatically)
+  * host permissions: `<all_urls>` if you want broad coverage (or prompt user)
+
+Firefox note: MV3 support differs; if cross-browser is a goal, design with fallback paths and test early.
+
+---
+
+## Interference with other extensions (how to minimize)
+
+Document and design for coexistence:
+
+* Patch minimally; preserve original functions and call-through on allow
+* Don’t permanently override if not needed (e.g., only intercept when mode != Off)
+* Avoid `stopImmediatePropagation()` except when blocking
+* Provide per-site Off + allowlist to resolve conflicts fast
+* Log reason codes so users can troubleshoot (“Blocked: no user intent in Strict mode”)
+
+---
+
+## Win+R disabling answer (for your doc)
+
+Include a clear section:
+
+> PasteGuard cannot disable Win+R or prevent pasting into external apps. Browser extensions do not have OS-level keyboard control. PasteGuard prevents dangerous clipboard content from being placed on the clipboard and warns users before they paste into risky contexts.
+
+If you want an “enterprise hardening” appendix, you can mention optional complementary controls (GPO/Intune/EDR), but keep the extension scope clean.
+
+---
+
+## Test plan (you’ll thank yourself later)
+
+### Positive tests (should block/warn)
+
+* Fake ClickFix pages that copy:
+
+  * `powershell -enc ...`
+  * `curl http://... | sh`
+  * `mshta http://...`
+  * payloads with RLO/zero-width chars
+* Pages that copy on load or mouseover (strict should block)
+
+### Negative tests (should not break)
+
+* Copy buttons on GitHub, docs sites, password managers, 2FA sites
+* Copy of normal URLs, UUIDs, invite codes, JSON snippets
+* Ctrl/Cmd+C on selected text
+
+### Regression tests
+
+* Multiple frames/iframes
+* SPA navigation (URL changes without reload)
+* sites with heavy JS that redefine clipboard APIs
+
+---
+
+If you want, next step I can produce a **full “Developer Requirements + Technical Design” doc** with:
+
+* data structures (settings, allowlist entries, event schema)
+* a risk scoring table
+* exact state machine for Strict mode intent windows
+* recommended file layout (`/src/sw`, `/src/content`, `/src/injected`, `/ui`)
+* and “MVP vs v1 vs v2” milestones
+
+Just tell me whether you’re targeting **Chrome only** first (fastest) or **Chrome + Firefox** from day one (more constraints).
+
