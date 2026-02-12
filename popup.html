@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PasteGuard</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <img src="icons/icon48.png" alt="PasteGuard" class="logo">
+    <h1>PasteGuard</h1>
+  </header>
+
+  <section class="site-info">
+    <span class="host" id="host">—</span>
+    <span class="mode-badge" id="modeBadge">normal</span>
+  </section>
+
+  <section class="mode-selector">
+    <label>Mode for this site:</label>
+    <div class="mode-buttons">
+      <button data-mode="off" id="btnOff">Off</button>
+      <button data-mode="normal" id="btnNormal">Normal</button>
+      <button data-mode="strict" id="btnStrict">Strict</button>
+    </div>
+  </section>
+
+  <section class="stats">
+    <div class="stat">
+      <span class="stat-value" id="blockCount">0</span>
+      <span class="stat-label">Blocks</span>
+    </div>
+  </section>
+
+  <section class="log">
+    <h2>Recent Events</h2>
+    <div id="logEntries" class="log-entries">
+      <p class="empty">No events yet.</p>
+    </div>
+  </section>
+
+  <footer>
+    <button id="btnAllowlist" class="link-btn">Manage Allowlist</button>
+    <button id="btnClearLog" class="link-btn">Clear Log</button>
+  </footer>
+
+  <!-- Allowlist panel (hidden by default) -->
+  <div id="allowlistPanel" class="panel hidden">
+    <h2>Allowlist</h2>
+    <div id="allowlistEntries" class="allowlist-entries"></div>
+    <div class="add-row">
+      <input type="text" id="allowlistInput" placeholder="example.com">
+      <button id="btnAddAllowlist">Add</button>
+    </div>
+    <button id="btnBackFromAllowlist" class="link-btn">Back</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
