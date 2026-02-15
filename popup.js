@@ -134,6 +134,11 @@ function loadAllowlist() {
   });
 }
 
+// --- Settings ---
+$("#btnSettings").addEventListener("click", () => {
+  chrome.runtime.openOptionsPage();
+});
+
 // --- Clear log ---
 $("#btnClearLog").addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "clear_log" }, () => {

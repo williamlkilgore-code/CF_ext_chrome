@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PasteGuard — Settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <img src="icons/icon48.png" alt="" class="logo">
+      <div>
+        <h1>PasteGuard Settings</h1>
+        <p class="version" id="version"></p>
+      </div>
+    </header>
+
+    <!-- Global Mode -->
+    <section class="card">
+      <h2>Default Protection Mode</h2>
+      <p class="desc">Applied to all sites without a per-site override or allowlist entry.</p>
+      <div class="mode-buttons">
+        <button data-mode="off" id="globalOff">
+          <span class="mode-icon">&#9676;</span>
+          <span class="mode-name">Off</span>
+          <span class="mode-desc">No interception</span>
+        </button>
+        <button data-mode="normal" id="globalNormal">
+          <span class="mode-icon">&#9679;</span>
+          <span class="mode-name">Normal</span>
+          <span class="mode-desc">Block high-confidence threats</span>
+        </button>
+        <button data-mode="strict" id="globalStrict">
+          <span class="mode-icon">&#11044;</span>
+          <span class="mode-name">Strict</span>
+          <span class="mode-desc">Block without user intent + medium threats</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Detection Tuning -->
+    <section class="card">
+      <h2>Detection Tuning</h2>
+
+      <div class="field">
+        <label for="intentWindow">User Intent Window (Strict mode)</label>
+        <p class="desc">How long after a click/keypress a clipboard write is considered intentional.</p>
+        <div class="range-row">
+          <input type="range" id="intentWindow" min="500" max="3000" step="100">
+          <span id="intentWindowValue" class="range-value">1200ms</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- UI Preferences -->
+    <section class="card">
+      <h2>Notifications &amp; UI</h2>
+
+      <div class="toggle-row">
+        <label for="showNotifications">
+          <strong>Browser notifications</strong>
+          <span class="desc">Show a system notification when a clipboard write is blocked</span>
+        </label>
+        <input type="checkbox" id="showNotifications" class="toggle">
+      </div>
+
+      <div class="toggle-row">
+        <label for="showBanner">
+          <strong>On-page warning banner</strong>
+          <span class="desc">Show a banner at the top of the page when content is blocked</span>
+        </label>
+        <input type="checkbox" id="showBanner" class="toggle">
+      </div>
+    </section>
+
+    <!-- Privacy -->
+    <section class="card">
+      <h2>Privacy</h2>
+      <div class="toggle-row">
+        <label for="logFullPayload">
+          <strong>Store full clipboard text in logs</strong>
+          <span class="desc">Off by default. When on, blocked clipboard content is saved to the event log for review. All data stays local.</span>
+        </label>
+        <input type="checkbox" id="logFullPayload" class="toggle">
+      </div>
+    </section>
+
+    <!-- Allowlist -->
+    <section class="card">
+      <h2>Allowlist</h2>
+      <p class="desc">Sites where PasteGuard is completely disabled. Supports <code>example.com</code> (includes subdomains) or <code>*.example.com</code> (subdomains only).</p>
+      <div class="list-container" id="allowlistContainer">
+        <p class="empty" id="allowlistEmpty">No allowlisted sites.</p>
+      </div>
+      <div class="add-row">
+        <input type="text" id="allowlistInput" placeholder="example.com">
+        <button id="btnAddAllowlist" class="btn-primary">Add</button>
+      </div>
+    </section>
+
+    <!-- Site Overrides -->
+    <section class="card">
+      <h2>Per-Site Overrides</h2>
+      <p class="desc">Sites with custom mode settings that differ from the global default.</p>
+      <div class="list-container" id="overridesContainer">
+        <p class="empty" id="overridesEmpty">No per-site overrides.</p>
+      </div>
+    </section>
+
+    <!-- Event Log -->
+    <section class="card">
+      <h2>Event Log</h2>
+      <p class="desc">Recent clipboard interception events.</p>
+      <div class="log-controls">
+        <button id="btnRefreshLog" class="btn-secondary">Refresh</button>
+        <button id="btnExportLog" class="btn-secondary">Export JSON</button>
+        <button id="btnClearLog" class="btn-danger">Clear All</button>
+      </div>
+      <div class="log-table-wrapper">
+        <table class="log-table" id="logTable">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Action</th>
+              <th>Risk</th>
+              <th>Description</th>
+              <th>API</th>
+              <th>Site</th>
+              <th>Intent</th>
+            </tr>
+          </thead>
+          <tbody id="logBody">
+          </tbody>
+        </table>
+      </div>
+      <p class="empty" id="logEmpty">No events recorded.</p>
+    </section>
+
+    <!-- About -->
+    <section class="card about">
+      <h2>About</h2>
+      <p>PasteGuard detects and blocks ClickFix-style attacks that place dangerous commands on your clipboard. All detection is performed locally — no data is sent externally.</p>
+      <p class="limitations"><strong>Limitations:</strong> PasteGuard cannot disable Win+R or prevent pasting into external apps. Browser extensions do not have OS-level keyboard control. PasteGuard prevents dangerous clipboard content from being placed on the clipboard and warns users before they paste into risky contexts.</p>
+    </section>
+
+    <div class="save-bar" id="saveBar">
+      <span>You have unsaved changes.</span>
+      <button id="btnSave" class="btn-primary">Save Settings</button>
+    </div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

