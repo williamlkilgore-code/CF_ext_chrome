@@ -19,7 +19,6 @@ chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === "install") {
     chrome.storage.local.set(DEFAULTS);
   }
-  // Migrate: add new keys on update without overwriting existing
   if (details.reason === "update") {
     chrome.storage.local.get(null, (data) => {
       const patch = {};
@@ -48,6 +47,30 @@ function persistLog() {
   chrome.storage.local.set({ eventLog, blockCount });
 }
 
+// --- Punycode / IDN normalization ---
+// Simple ASCII-based normalization for hostname matching.
+// Browsers already give us punycode-encoded hostnames from URL objects,
+// so we normalize to lowercase and ensure consistency.
+function normalizeHost(host) {
+  if (!host) return "";
+  try {
+    // Use URL constructor to get punycode-normalized hostname
+    const u = new URL("http://" + host);
+    return u.hostname.toLowerCase();
+  } catch {
+    return host.toLowerCase();
+  }
+}
+
+// --- SHA-256 hashing for privacy-preserving logs ---
+async function sha256(text) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(text);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 // --- Message handler ---
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "clipboard_event") {
@@ -55,17 +78,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === "allow_once") {
-    allowOnceHosts[msg.host] = Date.now() + 30000; // 30s window
-    // Notify all tabs on this host to temporarily allow
-    notifyAllowOnce(msg.host);
+    const host = normalizeHost(msg.host);
+    allowOnceHosts[host] = Date.now() + 30000;
+    notifyAllowOnce(host);
   }
 
   if (msg.type === "check_allow_once") {
-    const entry = allowOnceHosts[msg.host];
+    const host = normalizeHost(msg.host);
+    const entry = allowOnceHosts[host];
     const allowed = entry && Date.now() < entry;
     if (allowed) {
-      // Consume the allow-once token
-      delete allowOnceHosts[msg.host];
+      delete allowOnceHosts[host];
     }
     sendResponse({ allowed: !!allowed });
     return true;
@@ -75,6 +98,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const tabUrl = msg.url || "";
     let host = "";
     try { host = new URL(tabUrl).hostname.toLowerCase(); } catch {}
+    host = normalizeHost(host);
 
     chrome.storage.local.get(["globalMode", "siteOverrides", "allowlist"], (data) => {
       const overrides = data.siteOverrides || {};
@@ -102,7 +126,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (msg.scope === "global") {
         chrome.storage.local.set({ globalMode: msg.mode });
       } else {
-        overrides[msg.host] = msg.mode;
+        const host = normalizeHost(msg.host);
+        overrides[host] = msg.mode;
         chrome.storage.local.set({ siteOverrides: overrides });
       }
       sendResponse({ ok: true });
@@ -113,7 +138,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "clear_site_override") {
     chrome.storage.local.get(["siteOverrides"], (data) => {
       const overrides = data.siteOverrides || {};
-      delete overrides[msg.host];
+      delete overrides[normalizeHost(msg.host)];
       chrome.storage.local.set({ siteOverrides: overrides });
       sendResponse({ ok: true });
     });
@@ -130,8 +155,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "add_allowlist") {
     chrome.storage.local.get(["allowlist"], (data) => {
       const list = data.allowlist || [];
-      if (!list.includes(msg.host)) {
-        list.push(msg.host);
+      const host = normalizeHost(msg.host);
+      if (!list.includes(host)) {
+        list.push(host);
         chrome.storage.local.set({ allowlist: list });
       }
       sendResponse({ ok: true });
@@ -141,7 +167,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === "remove_allowlist") {
     chrome.storage.local.get(["allowlist"], (data) => {
-      const list = (data.allowlist || []).filter((h) => h !== msg.host);
+      const target = normalizeHost(msg.host);
+      const list = (data.allowlist || []).filter((h) => normalizeHost(h) !== target);
       chrome.storage.local.set({ allowlist: list });
       sendResponse({ ok: true });
     });
@@ -193,7 +220,7 @@ function notifyAllowOnce(host) {
   chrome.tabs.query({}, (tabs) => {
     for (const tab of tabs) {
       try {
-        const tabHost = new URL(tab.url).hostname.toLowerCase();
+        const tabHost = normalizeHost(new URL(tab.url).hostname);
         if (tabHost === host) {
           chrome.tabs.sendMessage(tab.id, { type: "allow_once_granted", host });
         }
@@ -202,7 +229,7 @@ function notifyAllowOnce(host) {
   });
 }
 
-function handleClipboardEvent(msg, sender) {
+async function handleClipboardEvent(msg, sender) {
   const entry = {
     action: msg.action,
     risk: msg.risk,
@@ -215,15 +242,24 @@ function handleClipboardEvent(msg, sender) {
     userIntent: msg.userIntent,
     mode: msg.mode,
     timestamp: msg.timestamp || Date.now(),
+    frameId: msg.frameId || 0,
+    frameUrl: msg.frameUrl || msg.url,
   };
 
-  // Store full payload if enabled
-  if (msg.fullText) {
-    chrome.storage.local.get(["logFullPayload"], (data) => {
-      if (data.logFullPayload) {
-        entry.fullText = msg.fullText;
-      }
-    });
+  // Privacy-preserving hash of content (always stored)
+  if (msg.text) {
+    entry.contentHash = await sha256(msg.text);
+  }
+
+  // Store full payload only if enabled
+  const data = await chrome.storage.local.get(["logFullPayload"]);
+  if (data.logFullPayload && msg.fullText) {
+    entry.fullText = msg.fullText;
+  }
+
+  // User intent element metadata
+  if (msg.intentElement) {
+    entry.intentElement = msg.intentElement;
   }
 
   eventLog.unshift(entry);
@@ -233,11 +269,10 @@ function handleClipboardEvent(msg, sender) {
     blockCount++;
     updateBadge(blockCount);
 
-    chrome.storage.local.get(["showNotifications"], (data) => {
-      if (data.showNotifications !== false) {
-        showNotification(entry);
-      }
-    });
+    const notifData = await chrome.storage.local.get(["showNotifications"]);
+    if (notifData.showNotifications !== false) {
+      showNotification(entry);
+    }
   }
 
   persistLog();
@@ -252,11 +287,12 @@ function updateBadge(count) {
 }
 
 function showNotification(entry) {
+  const frameInfo = entry.frameId > 0 ? ` (iframe: ${getDomain(entry.frameUrl)})` : "";
   chrome.notifications.create({
     type: "basic",
     iconUrl: "icons/icon128.png",
     title: "PasteGuard \u2014 Blocked",
-    message: `Blocked suspicious clipboard content from ${getDomain(entry.url)}: ${entry.descriptions.join(", ")}`,
+    message: `Blocked suspicious clipboard content from ${getDomain(entry.url)}${frameInfo}: ${entry.descriptions.join(", ")}`,
   });
 }
 
@@ -265,7 +301,8 @@ function getDomain(url) {
 }
 
 function hostMatches(host, pattern) {
-  pattern = pattern.toLowerCase();
+  host = normalizeHost(host);
+  pattern = normalizeHost(pattern);
   if (pattern.startsWith("*.")) {
     const suffix = pattern.slice(2);
     return host === suffix || host.endsWith("." + suffix);

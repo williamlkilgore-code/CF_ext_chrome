@@ -256,6 +256,21 @@ function renderLog(log) {
       let domain = "";
       try { domain = new URL(ev.url).hostname; } catch { domain = ev.url || ""; }
 
+      // Frame info
+      const frameLabel = ev.frameId > 0 ? "iframe" : "top";
+
+      // Intent element tooltip
+      let intentTitle = ev.userIntent ? "User intent detected" : "No user intent";
+      if (ev.intentElement) {
+        const el = ev.intentElement;
+        intentTitle += `\nClicked: <${el.tag}>`;
+        if (el.ariaLabel) intentTitle += ` aria-label="${el.ariaLabel}"`;
+        if (el.innerText) intentTitle += ` "${el.innerText}"`;
+      }
+      if (ev.contentHash) {
+        intentTitle += `\nHash: ${ev.contentHash.slice(0, 16)}...`;
+      }
+
       return `<tr>
         <td style="white-space:nowrap">${escapeHtml(time)}</td>
         <td><span class="action-badge ${ev.action}">${ev.action}</span></td>
@@ -263,7 +278,8 @@ function renderLog(log) {
         <td>${escapeHtml(ev.descriptions?.join(", ") || "\u2014")}</td>
         <td>${escapeHtml(ev.api || "")}</td>
         <td title="${escapeHtml(ev.url || "")}">${escapeHtml(domain)}</td>
-        <td>${ev.userIntent ? "\u2714" : "\u2718"}</td>
+        <td>${escapeHtml(frameLabel)}</td>
+        <td title="${escapeHtml(intentTitle)}">${ev.userIntent ? "\u2714" : "\u2718"}</td>
       </tr>`;
     })
     .join("");

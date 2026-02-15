@@ -88,7 +88,8 @@
   }
 
   // --- Patch navigator.clipboard.writeText ---
-  navigator.clipboard.writeText = async function (text) {
+  // Preserve original function signature for extension coexistence
+  const patchedWriteText = async function writeText(text) {
     if (currentMode === "off") {
       return origWriteText(text);
     }
@@ -96,21 +97,29 @@
     const decision = await requestDecision(text, "writeText");
 
     if (decision.action === "block") {
-      return Promise.resolve();
+      return Promise.resolve(); // silently swallow
     }
     if (decision.action === "quarantine") {
       return origWriteText(
-        "[PasteGuard] Blocked suspicious clipboard content. Check the extension for details."
+        "[PasteGuard] Quarantined suspicious clipboard content. Click 'Copy anyway' in the banner to override."
       );
     }
     return origWriteText(text);
   };
 
+  // Preserve .name and .length to minimize fingerprinting / breakage
+  Object.defineProperty(patchedWriteText, "name", { value: "writeText" });
+  Object.defineProperty(patchedWriteText, "length", { value: 1 });
+  navigator.clipboard.writeText = patchedWriteText;
+
   // --- Patch document.execCommand ---
-  document.execCommand = function (command, ...args) {
-    // Copy blocking for execCommand is handled by the copy event listener below
+  // Preserve original call-through for all commands; copy blocking via event listener
+  const patchedExecCommand = function execCommand(command, ...args) {
     return origExecCommand(command, ...args);
   };
+  Object.defineProperty(patchedExecCommand, "name", { value: "execCommand" });
+  Object.defineProperty(patchedExecCommand, "length", { value: 1 });
+  document.execCommand = patchedExecCommand;
 
   // --- Intercept copy event at capture phase ---
   // This runs synchronously, so we use the lightweight inline detector

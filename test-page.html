@@ -218,11 +218,70 @@ console.log(sum(2, 3));</code>
     </p>
   </div>
 
+  <!-- ==================== IFRAME TESTS ==================== -->
+  <h2>MULTI-FRAME — iframe Interception Tests</h2>
+
+  <div class="card high">
+    <div class="label">iframe: writeText attack from embedded frame</div>
+    <p>This iframe attempts a clipboard write from a cross-origin-like context.
+       PasteGuard should intercept it and report frameId > 0 in the log.</p>
+    <iframe id="iframe-test-malicious" srcdoc="
+      <html><body style='background:#1a1a2e;color:#e2e8f0;font-family:sans-serif;padding:12px'>
+        <p>Embedded frame — will attempt clipboard write</p>
+        <button id='btn' style='padding:6px 12px;background:#ef4444;color:#fff;border:none;border-radius:4px;cursor:pointer'>
+          Copy malicious payload from iframe
+        </button>
+        <span id='result' style='display:block;margin-top:8px;font-size:12px'></span>
+        <script>
+          document.getElementById('btn').addEventListener('click', async () => {
+            const r = document.getElementById('result');
+            try {
+              await navigator.clipboard.writeText('powershell -enc SQBFAFgA');
+              r.textContent = 'Copied from iframe (should be blocked)';
+              r.style.color = '#ef4444';
+            } catch (e) {
+              r.textContent = 'Blocked or denied: ' + e.message;
+              r.style.color = '#22c55e';
+            }
+          });
+        </script>
+      </body></html>
+    " style="width:100%;height:120px;border:1px solid #334155;border-radius:6px;background:#1a1a2e"></iframe>
+  </div>
+
+  <div class="card safe">
+    <div class="label">iframe: safe copy from embedded frame</div>
+    <p>This iframe copies safe content. Should be allowed.</p>
+    <iframe id="iframe-test-safe" srcdoc="
+      <html><body style='background:#0f2a1a;color:#e2e8f0;font-family:sans-serif;padding:12px'>
+        <p>Embedded frame — safe copy</p>
+        <button id='btn' style='padding:6px 12px;background:#22c55e;color:#052e16;border:none;border-radius:4px;cursor:pointer'>
+          Copy safe text from iframe
+        </button>
+        <span id='result' style='display:block;margin-top:8px;font-size:12px'></span>
+        <script>
+          document.getElementById('btn').addEventListener('click', async () => {
+            const r = document.getElementById('result');
+            try {
+              await navigator.clipboard.writeText('Hello from an iframe!');
+              r.textContent = 'Copied safely from iframe';
+              r.style.color = '#22c55e';
+            } catch (e) {
+              r.textContent = 'Failed: ' + e.message;
+              r.style.color = '#ef4444';
+            }
+          });
+        </script>
+      </body></html>
+    " style="width:100%;height:120px;border:1px solid #334155;border-radius:6px;background:#0f2a1a"></iframe>
+  </div>
+
   <div class="note">
     <strong>How to use:</strong> Load the PasteGuard extension, then open this page.
     Click each "Copy to Clipboard" button and check whether PasteGuard blocks, warns, or allows.
     Toggle between Normal / Strict / Off in the popup to test each mode.
     The auto-copy tests verify that clipboard writes without user gestures are caught.
+    The iframe tests verify that PasteGuard works in embedded frames and reports frame metadata.
   </div>
 
   <script>

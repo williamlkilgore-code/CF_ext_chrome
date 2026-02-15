@@ -13,6 +13,7 @@
     lastCopyKey: 0,
     lastSelection: 0,
     lastContextMenu: 0,
+    lastClickElement: null,  // metadata about last clicked element
   };
 
   let intentWindowMs = 1200;
@@ -24,8 +25,10 @@
     }
   });
 
-  document.addEventListener("click", () => {
+  document.addEventListener("click", (e) => {
     intent.lastClick = Date.now();
+    // Capture element metadata for intent analysis
+    intent.lastClickElement = getElementMeta(e.target);
   }, true);
 
   document.addEventListener("keydown", (e) => {
@@ -38,9 +41,28 @@
     intent.lastSelection = Date.now();
   });
 
-  document.addEventListener("contextmenu", () => {
+  document.addEventListener("contextmenu", (e) => {
     intent.lastContextMenu = Date.now();
+    intent.lastClickElement = getElementMeta(e.target);
   }, true);
+
+  function getElementMeta(el) {
+    if (!el || !el.tagName) return null;
+    try {
+      return {
+        tag: el.tagName.toLowerCase(),
+        id: el.id || undefined,
+        className: (el.className && typeof el.className === "string")
+          ? el.className.slice(0, 80) : undefined,
+        ariaLabel: el.getAttribute("aria-label") || undefined,
+        innerText: el.innerText ? el.innerText.slice(0, 50) : undefined,
+        type: el.type || undefined,
+        role: el.getAttribute("role") || undefined,
+      };
+    } catch {
+      return { tag: "unknown" };
+    }
+  }
 
   function hasRecentUserIntent() {
     const now = Date.now();
@@ -51,13 +73,19 @@
     );
   }
 
+  function getIntentElement() {
+    if (Date.now() - intent.lastClick < intentWindowMs) {
+      return intent.lastClickElement;
+    }
+    return null;
+  }
+
   // --- Allow-once state ---
   let allowOnceActive = false;
 
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "allow_once_granted" && msg.host === getHostname()) {
       allowOnceActive = true;
-      // Auto-expire after 30s in case it's never consumed
       setTimeout(() => { allowOnceActive = false; }, 30000);
     }
   });
@@ -68,6 +96,15 @@
 
   function getHostname() {
     try { return location.hostname.toLowerCase(); } catch { return ""; }
+  }
+
+  // Frame info for logging
+  function getFrameInfo() {
+    const isTopFrame = (window === window.top);
+    return {
+      frameUrl: location.href,
+      isTopFrame,
+    };
   }
 
   function loadSiteSettings() {
@@ -110,7 +147,6 @@
 
   loadSiteSettings();
 
-  // Reload settings when storage changes
   chrome.storage.onChanged.addListener(() => {
     loadSiteSettings();
   });
@@ -125,11 +161,8 @@
     }
   }
 
-  // Catch pushState/replaceState and popstate
   window.addEventListener("popstate", checkUrlChange);
   window.addEventListener("hashchange", checkUrlChange);
-
-  // Poll for pushState changes (no native event fires for these)
   setInterval(checkUrlChange, 1000);
 
   // --- Inject page-world script ---
@@ -157,7 +190,6 @@
   });
 
   function handleClipboardRequest(msg) {
-    // If mode is off, allow everything
     if (siteMode === "off") {
       respond(msg.id, "allow");
       return;
@@ -167,22 +199,12 @@
     if (allowOnceActive) {
       allowOnceActive = false;
       respond(msg.id, "allow");
-      // Still log it
       const result = PasteGuardDetector.analyze(msg.text);
       if (result.risk >= PasteGuardDetector.RISK.MED) {
-        chrome.runtime.sendMessage({
-          type: "clipboard_event",
+        sendEvent({
           action: "allow_once",
-          risk: result.risk,
-          categories: result.categories,
-          descriptions: result.descriptions,
-          preview: PasteGuardDetector.preview(msg.text),
-          textLength: msg.text.length,
-          url: msg.url,
-          api: msg.api,
-          userIntent: hasRecentUserIntent(),
-          mode: siteMode,
-          timestamp: msg.timestamp,
+          result,
+          msg,
         });
       }
       return;
@@ -190,6 +212,7 @@
 
     const result = PasteGuardDetector.analyze(msg.text);
     const userIntent = hasRecentUserIntent();
+    const intentElement = getIntentElement();
 
     let action = "allow";
 
@@ -199,33 +222,29 @@
       }
     } else if (siteMode === "strict") {
       if (result.risk >= PasteGuardDetector.RISK.MED) {
+        // In strict mode, quarantine medium-risk content instead of flat block
+        action = "quarantine";
+      } else if (result.risk >= PasteGuardDetector.RISK.HIGH) {
         action = "block";
       } else if (!userIntent) {
         action = "block";
       }
     }
 
-    // Notify background service worker
-    if (result.risk >= PasteGuardDetector.RISK.MED || action === "block") {
-      chrome.runtime.sendMessage({
-        type: "clipboard_event",
+    // Notify background
+    if (result.risk >= PasteGuardDetector.RISK.MED || action !== "allow") {
+      sendEvent({
         action,
-        risk: result.risk,
-        categories: result.categories,
-        descriptions: result.descriptions,
-        preview: PasteGuardDetector.preview(msg.text),
-        textLength: msg.text.length,
-        url: msg.url,
-        api: msg.api,
+        result,
+        msg,
         userIntent,
-        mode: siteMode,
-        timestamp: msg.timestamp,
+        intentElement,
       });
     }
 
-    // Show on-page warning for blocks
-    if (action === "block" && showBanner) {
-      showWarningBanner(result, msg.id);
+    // Show on-page warning for blocks/quarantine
+    if ((action === "block" || action === "quarantine") && showBanner) {
+      showWarningBanner(result, msg.id, action);
     }
 
     respond(msg.id, action);
@@ -236,6 +255,7 @@
 
     const result = PasteGuardDetector.analyze(msg.text);
     if (result.risk >= PasteGuardDetector.RISK.MED) {
+      const frame = getFrameInfo();
       chrome.runtime.sendMessage({
         type: "clipboard_event",
         action: msg.blocked ? "block" : "warn",
@@ -243,18 +263,44 @@
         categories: result.categories,
         descriptions: result.descriptions,
         preview: PasteGuardDetector.preview(msg.text),
+        text: msg.text,
         textLength: msg.text.length,
         url: msg.url,
         api: "copyEvent",
         userIntent: hasRecentUserIntent(),
+        intentElement: getIntentElement(),
         mode: siteMode,
         timestamp: msg.timestamp,
+        frameUrl: frame.frameUrl,
+        frameId: frame.isTopFrame ? 0 : 1,
       });
 
       if (msg.blocked && showBanner) {
-        showWarningBanner(result, null);
+        showWarningBanner(result, null, "block");
       }
     }
+  }
+
+  function sendEvent({ action, result, msg, userIntent, intentElement }) {
+    const frame = getFrameInfo();
+    chrome.runtime.sendMessage({
+      type: "clipboard_event",
+      action,
+      risk: result.risk,
+      categories: result.categories,
+      descriptions: result.descriptions,
+      preview: PasteGuardDetector.preview(msg.text),
+      text: msg.text,
+      textLength: msg.text.length,
+      url: msg.url,
+      api: msg.api,
+      userIntent: userIntent !== undefined ? userIntent : hasRecentUserIntent(),
+      intentElement: intentElement || getIntentElement(),
+      mode: siteMode,
+      timestamp: msg.timestamp,
+      frameUrl: frame.frameUrl,
+      frameId: frame.isTopFrame ? 0 : 1,
+    });
   }
 
   function respond(id, action) {
@@ -265,7 +311,7 @@
   }
 
   // --- On-page warning banner ---
-  function showWarningBanner(result, requestId) {
+  function showWarningBanner(result, requestId, action) {
     const existing = document.getElementById("pasteguard-banner");
     if (existing) existing.remove();
 
@@ -275,7 +321,8 @@
       position: fixed; top: 0; left: 0; right: 0; z-index: 2147483647;
       background: #1e1e2e; color: #e5e7eb; font-family: system-ui, sans-serif;
       font-size: 14px; padding: 12px 20px; display: flex; align-items: center;
-      gap: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); border-bottom: 3px solid #ef4444;
+      gap: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      border-bottom: 3px solid ${action === "quarantine" ? "#f59e0b" : "#ef4444"};
     `;
 
     const icon = document.createElement("span");
@@ -284,10 +331,14 @@
 
     const text = document.createElement("span");
     text.style.cssText = "flex: 1;";
-    text.textContent = `PasteGuard blocked a suspicious clipboard write: ${result.descriptions.join(", ")}`;
+    if (action === "quarantine") {
+      text.textContent = `PasteGuard quarantined suspicious clipboard content: ${result.descriptions.join(", ")}`;
+    } else {
+      text.textContent = `PasteGuard blocked a suspicious clipboard write: ${result.descriptions.join(", ")}`;
+    }
 
     const allowBtn = document.createElement("button");
-    allowBtn.textContent = "Allow once";
+    allowBtn.textContent = action === "quarantine" ? "Copy anyway" : "Allow once";
     allowBtn.style.cssText = `
       background: #374151; color: #e5e7eb; border: 1px solid #6b7280;
       padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px;
